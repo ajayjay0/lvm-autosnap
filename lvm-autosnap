@@ -1,0 +1,198 @@
+#!/bin/bash
+
+#
+# Create rolling lvm snapshots
+#
+
+snap_permission='r'   # Read/Only snapshots?
+
+#
+# Defaults
+#
+
+lv_name=''
+vg_name=''
+snap_size='2G'
+snap_tag='autosnap'
+keep_time=8
+keep_units='days'
+max_daily=5
+lvm_test=""
+
+lv_prefix='/sbin'
+lvs_cmd="${lv_prefix}/lvs"
+lvremove_cmd="${lv_prefix}/lvremove"
+lvcreate_cmd="${lv_prefix}/lvcreate"
+
+prog_name='lvm-autosnap'
+prog_version='1.0.0'
+
+##################### HELP ##############################
+function help() {
+cat << EOF
+  
+${prog_name} takes and maintains a periodic series of lvm snapshots for an arbitrary logical volume
+
+Usage:
+  ${prog_name} --vg=<vg> --lv=<lv> [optional parameters]
+
+  required:
+    -g | --vg:         The logical volume group
+    -l | --lv:         The logical volume name
+
+  optional:
+    -h | --help:        Hello!
+    -d | --dry-run:     List commands, do not commit changes
+    -k | --keep-time:   Retention period in "keep-units". Default=${keep_units}
+    -m | --max-daily:   Maximum number of snaphots allowed per day. Default=${max_daily}
+    -s | --size:        Snapshot size. default=${snap_size}
+    -t | --tag:         Tag to be applied to snapshots. Default=${snap_tag}
+    -u | --keep-units:  Retention period (see keep-units). Default=${keep_time}
+
+  Examples:
+    ${prog_name} --vg=mv_vg --lv=my_lv
+      take an autosnap of mv_vg/my_lv, prune using the default retention period of ${keep_time} ${keep_units}
+
+    ${prog_name} --vg=mv_vg --lv=my_lv --size=4G
+      take a 4G autosnap of mv_vg/my_lv, prune using the default retention period of ${keep_time} ${keep_units}
+
+    ${prog_name} --dry-run --vg=mv_vg --lv=my_lv --keep-time=1 --keep_units=hour
+      SIMULATE an autosnap of mv_vg/my_lv, with pruning of other autosnaps older than one hour
+
+${prog_name} v${prog_version}
+EOF
+}
+
+##################### PARSER ##############################
+function parser() {
+  parsed_args=$(
+    getopt \
+      --options dhl:g:s:t:k:u:m: \
+      --longoptions dry-run,test,help,lv:,vg:,size:,tag:,keep-time:,keep-units:,max-daily: \
+      --name "${prog_name}" \
+      -- "$@"
+  )
+  parse_rc=$?
+
+  if [ ${parse_rc} != 0 ] ; then
+    help  
+    exit 1
+  fi
+
+  # Note the quotes around 'parsed_args': they are essential!
+  eval set -- "${parsed_args}"
+
+
+  while true; do
+    case "$1" in
+      -d | --dry-run | --test)  lvm_test="--test"; shift 1 ;;
+      -l | --lv )               lv_name="$2";     shift 2 ;;
+      -g | --vg )               vg_name="$2";     shift 2 ;;
+      -s | --size )             snap_size="$2";   shift 2 ;;
+      -t | --tag )              snap_tag="$2";    shift 2 ;;
+      -k | --keep-time )        keep_time="$2";   shift 2 ;;
+      -u | --keep-units )       keep_units="$2";  shift 2 ;;
+      -m | --max-daily )        max_daily="$2";   shift 2 ;;
+      -h | --help)              help;             exit 1 ;;
+      -- )                                        shift 1; break ;;
+      * ) echo "Unexpected: $1"; help; break ;;
+    esac
+  done
+
+  ### echo "${prog_name} parsed: test='${lvm_test}', vg_name='${vg_name}', lv_name='${lv_name}', snap_size='${snap_size}', keep_time='${keep_time}', keep_units='${keep_units}', max_daily='${max_daily}', snap_tag='${snap_tag}'"
+}
+
+#
+# Snap to it
+#
+function autosnap() {
+  local vg_name="$1"
+  local lv_name="$2"
+  local snap_size="$3"
+  local keep_time="$4"
+  local keep_units="$5"
+  local snap_tag="$6"
+
+  local time_search="${keep_time} ${keep_units} ago"
+
+  echo "${prog_name}: vg_name='${vg_name}', lv_name='${lv_name}', snap_size='${snap_size}', time_search='${time_search}', max_daily='${max_daily}', snap_tag='${snap_tag}'"
+  ### echo "${prog_name}: lvcreate='${lvcreate_cmd}', lvremove='${lvremove_cmd}'"
+
+  #
+  # See how many we already did
+  #
+  snaps=$( ${lvs_cmd} \
+    --no-headings \
+    --options="name,lv_path" \
+    --select="vg_name=${vg_name} \
+      && origin=${lv_name} \
+      && lv_name=~_${snap_tag}_ \
+      && role='snapshot' \
+      && lv_time since \"midnight\" " \
+      @${snap_tag} \
+      | wc -l )
+
+  if (( snaps < max_daily )); then
+    #
+    # Create new snapshot using date and time
+    #
+    echo "There are ${snaps} '${vg_name}/${lv_name}' snapshots already in existence for today"
+    echo "Processing ${snap_size} auto snapshot for '${vg_name}/${lv_name}', time_search='${time_search}'"
+    snap_prefix="${lv_name}_${snap_tag}_"   # Prefix of snapshot volume name.
+
+    printf -v today '%(%FT%H%M%S)T' -1      # Internal "printf" is much faster than external date
+    new_snapshot="${snap_prefix}${today}"
+      echo "Creating snapshot ${new_snapshot} for ${vg_name}/${lv_name}"
+      ${lvcreate_cmd} \
+        --snapshot \
+        --addtag="${snap_tag}" \
+        --size=${snap_size} \
+        --permission=${snap_permission} \
+        --name=${new_snapshot} \
+        ${vg_name}/${lv_name}
+  else
+    echo "We already have ${snaps} snapshots for '${vg_name}/${lv_name}' from today; creation suspended"
+  fi
+
+  # Clean old snapshots.
+  #
+  # No need to parse, we just look for snapshots with a creation date in the past
+  # We also pass vg, lv, name, and tag as safeguards
+  #
+  echo "Removing snpshots for '${vg_name}/${lv_name}' created 'before ${time_search}' "
+  ${lvremove_cmd} --yes \
+    --select="vg_name=${vg_name} \
+      && origin=${lv_name} \
+      && role=snapshot \
+      && lv_name=~_${snap_tag}_ \
+      && lv_time before \"${time_search}\" " \
+      @${snap_tag}
+}
+
+
+##### Be tidy ##########################
+function trim() {
+    local var="$*"
+    # remove leading whitespace characters
+    var="${var#"${var%%[![:space:]]*}"}"
+
+    # remove trailing whitespace characters
+    var="${var%"${var##*[![:space:]]}"}"
+
+    printf '%s' "$var"
+}
+
+
+############################# MAIN SEQUENCE STARTS ###############################################
+
+parser "$@"
+
+# Update commands for test mode
+lvremove_cmd=$( trim "${lvremove_cmd} ${lvm_test}" )
+lvcreate_cmd=$( trim "${lvcreate_cmd} ${lvm_test}" )
+
+if [ ! -z "${vg_name}" ] && [ ! -z "${lv_name}" ]; then
+  autosnap "${vg_name}" "${lv_name}" "${snap_size}" "${keep_time}" "${keep_units}" "${snap_tag}"
+else
+  echo "Need vg and lv to continue. Try: ${prog_name} --help"
+fi
