@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# 
+# Sample cron.daily job to run lvm-autosnap on a periodic basis
+# Adjust to your local environment before use!
+#
+
+### /usr/local/sbin/lvm-autosnap --vg vg1 --lv lv1 2>&1 >> /var/log/lvm-autosnap.log
+### /usr/local/sbin/lvm-autosnap --vg vg2 --lv lv2 2>&1 >> /var/log/lvm-autosnap.log
