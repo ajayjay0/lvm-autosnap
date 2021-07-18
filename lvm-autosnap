@@ -115,7 +115,7 @@ function autosnap() {
 
   local time_search="${keep_time} ${keep_units} ago"
 
-  echo "${prog_name}: vg_name='${vg_name}', lv_name='${lv_name}', snap_size='${snap_size}', time_search='${time_search}', max_daily='${max_daily}', snap_tag='${snap_tag}'"
+  echo -e "\n${prog_name}: vg_name='${vg_name}', lv_name='${lv_name}', snap_size='${snap_size}', time_search='${time_search}', max_daily='${max_daily}', snap_tag='${snap_tag}'"
   ### echo "${prog_name}: lvcreate='${lvcreate_cmd}', lvremove='${lvremove_cmd}'"
 
   #
