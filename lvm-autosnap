@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 #
 # Create rolling lvm snapshots
@@ -20,9 +20,9 @@ max_daily=5
 lvm_test=""
 
 lv_prefix='/sbin'
-lvs_cmd="${lv_prefix}/lvs"
-lvremove_cmd="${lv_prefix}/lvremove"
-lvcreate_cmd="${lv_prefix}/lvcreate"
+lvs_cmd="$(which lvs)"
+lvremove_cmd="$(which lvremove)"
+lvcreate_cmd="$(which lvcreate)"
 
 prog_name='lvm-autosnap'
 prog_version='1.0.0'
